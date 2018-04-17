@@ -9,10 +9,12 @@ import stat
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 import unittest
 from distutils.ccompiler import new_compiler, gen_lib_options
 from test import support
+from test.support import script_helper
 
 TESTFN = support.TESTFN
 
@@ -165,6 +167,33 @@ class TestSupport(unittest.TestCase):
         self.assertTrue(warn.startswith(f'tests may fail, unable to create '
                                         f'temporary directory {path!r}: '),
                         warn)
+
+    @unittest.skipUnless(hasattr(os, "fork"), "test requires os.fork")
+    def test_temp_dir__forked_child(self):
+        """Test that a forked child process does not remove the directory."""
+        # See bpo-30028 for details.
+        # Run the test as an external script, because it uses fork.
+        script_helper.assert_python_ok("-c", textwrap.dedent("""
+            import os
+            from test import support
+            with support.temp_cwd() as temp_path:
+                pid = os.fork()
+                if pid != 0:
+                    # parent process (child has pid == 0)
+
+                    # wait for the child to terminate
+                    (pid, status) = os.waitpid(pid, 0)
+                    if status != 0:
+                        raise AssertionError(f"Child process failed with exit "
+                                             f"status indication 0x{status:x}.")
+
+                    # Make sure that temp_path is still present. When the child
+                    # process leaves the 'temp_cwd'-context, the __exit__()-
+                    # method of the context must not remove the temporary
+                    # directory.
+                    if not os.path.isdir(temp_path):
+                        raise AssertionError("Child removed temp_path.")
+        """))
 
     # Tests for change_cwd()
 
@@ -541,47 +570,6 @@ class TestSupport(unittest.TestCase):
             self.assertTrue(support.match_test(test_access))
             self.assertFalse(support.match_test(test_chdir))
 
-    @unittest.skipIf(os.name == "nt", "Test cannot run on Windows")
-    def test_build_extensions_as_builtins(self):
-        # https://bugs.python.org/issue32232
-
-        compiler = new_compiler()
-        workdir = "."
-        base_dir = os.path.realpath(os.path.join(os.path.abspath(__file__), "../../.."))
-
-        includes = ["Python", "Include", "Objects", ".", "Modules/expat"]
-
-        for _dir in includes:
-            compiler.add_include_dir(os.path.join(base_dir,_dir))
-
-        for _dir in includes:
-            compiler.add_include_dir(_dir)
-
-        compiler.define_macro(name="Py_BUILD_CORE", value=1)
-
-        targets = [
-            "Modules/_stat.c", "Modules/_bisectmodule.c",
-            "Modules/_datetimemodule.c", "Modules/_lsprof.c",
-            "Modules/_opcode.c", "Modules/_localemodule.c",
-            "Modules/_heapqmodule.c", "Modules/_tracemalloc.c",
-            "Modules/_elementtree.c",
-            "Modules/_weakref.c", "Modules/_operator.c",
-            "Modules/_math.c",
-            "Modules/_asynciomodule.c", "Modules/_functoolsmodule.c",
-            "Modules/_randommodule.c", "Modules/_queuemodule.c",
-            "Modules/_testimportmultiple.c", "Modules/_testbuffer.c",
-            "Modules/_collectionsmodule.c", "Modules/_posixsubprocess.c",
-            "Modules/_json.c", "Modules/_testmultiphase.c",
-            "Modules/_struct.c",
-            "Modules/_threadmodule.c", "Modules/_cryptmodule.c",
-            "Modules/_sre.c",
-            "Modules/_csv.c",
-            "Modules/_codecsmodule.c", "Modules/_pickle.c"
-        ]
-
-        for target in targets:
-            object_file, = compiler.compile([os.path.join(base_dir, target)], extra_preargs=["-std=c99"])
-            os.unlink(object_file)
 
 
     # XXX -follows a list of untested API
